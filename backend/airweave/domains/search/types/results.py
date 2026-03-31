@@ -238,6 +238,13 @@ class SearchResults(BaseModel):
         default_factory=list,
         description="Search results ordered by relevance (highest first).",
     )
+    knowledge_graph_context: str = Field(
+        default="",
+        description=(
+            "Knowledge graph context for the query — entities and relationships "
+            "extracted from the collection's knowledge graph. Empty when no KG data exists."
+        ),
+    )
 
     def __len__(self) -> int:
         """Return the number of results."""

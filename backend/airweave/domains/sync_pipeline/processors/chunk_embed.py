@@ -62,6 +62,11 @@ class ChunkEmbedProcessor:
             sync_context.logger.debug("[ChunkEmbedProcessor] No entities after text building")
             return []
 
+        # Step 2.5: Collect parent entity texts for KG ingestion (before chunking releases them)
+        for entity in processed:
+            if entity.textual_representation:
+                runtime.kg_texts.append(entity.textual_representation)
+
         # Step 3: Chunk entities
         chunk_entities = await self._chunk_entities(processed, sync_context, runtime)
 

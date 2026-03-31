@@ -59,10 +59,24 @@ export function formatSearchResponse(
         })
         .join("\n\n---\n\n");
 
+    // Knowledge graph context — rendered before results when available
+    const kgContext = (searchResponse as any).knowledge_graph_context as string | undefined;
+    const kgSection = kgContext
+        ? [
+              "## Knowledge Graph",
+              "",
+              kgContext,
+              "",
+              "---",
+              "",
+          ].join("\n")
+        : "";
+
     const summaryText = [
         `**Collection:** ${collection} | **Tier:** ${tier}`,
         `**Results:** ${results.length}`,
         "",
+        kgSection,
         formattedResults || "No results found.",
     ].join("\n");
 

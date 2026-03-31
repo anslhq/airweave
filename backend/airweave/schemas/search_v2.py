@@ -134,6 +134,7 @@ class SearchV2Response(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
+                    "knowledge_graph_context": "",
                     "results": [
                         {
                             "entity_id": "page-abc123",
@@ -222,4 +223,11 @@ class SearchV2Response(BaseModel):
 
     results: list[SearchResult] = Field(
         default_factory=list, description="Search results ordered by relevance."
+    )
+    knowledge_graph_context: str = Field(
+        default="",
+        description=(
+            "Knowledge graph context for the query — entities and relationships "
+            "extracted from the collection's knowledge graph. Empty when no KG data exists."
+        ),
     )
