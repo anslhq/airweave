@@ -31,6 +31,7 @@ from airweave.adapters.llm.registry import (
 from airweave.adapters.llm.registry import (
     get_model_spec as get_llm_model_spec,
 )
+from airweave.adapters.llm.openai_compat import OpenAICompatLLM
 from airweave.adapters.llm.together import TogetherLLM
 from airweave.adapters.metrics import (
     PrometheusAgenticSearchMetrics,
@@ -1235,6 +1236,11 @@ def _build_llm_chain(
         if provider_cls is None:
             logger.warning(f"[SearchFactory] Unknown provider: {provider.value}")
             continue
+
+        # Use OpenAI-compatible client when a custom base_url is configured
+        # (e.g. local LLM endpoints that speak OpenAI protocol, not Together's)
+        if provider == LLMProvider.TOGETHER and settings.TOGETHER_BASE_URL:
+            provider_cls = OpenAICompatLLM
 
         available.append((provider, model, model_spec, provider_cls))
 

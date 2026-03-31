@@ -87,3 +87,5 @@ coverage.xml
 monke/venv/
 logs/
 monke/.runs/
+.mcp.json
+.serena/

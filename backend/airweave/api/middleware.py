@@ -276,7 +276,11 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
         # Handle OPTIONS preflight requests - only if allowed
         if request.method == "OPTIONS":
             # Check if origin is allowed (connect endpoints allow any origin)
-            is_allowed_origin = is_connect_endpoint or origin in self.default_origins
+            is_allowed_origin = (
+                is_connect_endpoint
+                or "*" in self.default_origins
+                or origin in self.default_origins
+            )
 
             if is_allowed_origin:
                 # Create a response with appropriate CORS headers
@@ -300,7 +304,11 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # Add CORS headers to the response for allowed origins
-        is_allowed_origin = is_connect_endpoint or origin in self.default_origins
+        is_allowed_origin = (
+            is_connect_endpoint
+            or "*" in self.default_origins
+            or origin in self.default_origins
+        )
 
         if is_allowed_origin:
             response.headers["Access-Control-Allow-Origin"] = origin

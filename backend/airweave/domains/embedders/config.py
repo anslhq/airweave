@@ -158,11 +158,11 @@ def _validate_local_reachability(dense_spec: DenseEmbedderEntry) -> None:
         return
 
     inference_url = settings.TEXT2VEC_INFERENCE_URL
-    health_url = f"{inference_url}/health"
+    probe_url = f"{inference_url}/vectors"
 
     try:
         with httpx.Client(timeout=httpx.Timeout(5.0)) as client:
-            response = client.get(health_url)
+            response = client.post(probe_url, json={"text": "health check"})
             response.raise_for_status()
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
         raise EmbeddingConfigError(

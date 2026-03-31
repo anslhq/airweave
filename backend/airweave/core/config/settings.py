@@ -193,6 +193,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: Optional[str] = None
     CEREBRAS_API_KEY: Optional[str] = None
     TOGETHER_API_KEY: Optional[str] = None
+    TOGETHER_BASE_URL: Optional[str] = None
     AZURE_KEYVAULT_NAME: Optional[str] = None
 
     # Docling OCR fallback service (None = disabled)
