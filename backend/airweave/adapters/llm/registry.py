@@ -205,9 +205,9 @@ MODEL_REGISTRY: dict[LLMProvider, dict[LLMModel, LLMModelSpec]] = {
             input_price_factor=0.30,
             output_price_factor=1.20,
         ),
-        # ── GPT-5.2 (OpenAI-compatible, e.g. local proxy) ────────
+        # ── GPT-5.2 / Gemini (OpenAI-compatible, routed via local proxy) ──
         LLMModel.GPT_5_2: LLMModelSpec(
-            api_model_name="gpt-5.2",
+            api_model_name="gemini-3.1-pro-preview(high)",
             context_window=274_000,
             max_output_tokens=16_384,
             required_tokenizer_type=TokenizerType.TIKTOKEN,
