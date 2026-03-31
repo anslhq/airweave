@@ -255,6 +255,7 @@ services:
       - DOCLING_BASE_URL=${DOCLING_BASE_URL:+http://docling:5001}
     volumes:
       - ../backend:/app
+      - ../local_storage:/app/local_storage
     entrypoint: [ "python", "-m", "airweave.domains.temporal.worker" ]
     depends_on:
       postgres:

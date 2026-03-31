@@ -695,7 +695,7 @@ async def _query_knowledge_graph(query: str, collection_readable_id: str) -> str
         result = await kg_service.query(query, mode="hybrid")
         return result or ""
     except Exception:
-        logger.debug(
+        logger.warning(
             "Knowledge graph query failed for collection=%s, returning empty context",
             collection_readable_id,
             exc_info=True,
