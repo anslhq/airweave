@@ -142,7 +142,7 @@ class KnowledgeGraphService:
         if self._rag is not None and self._initialized:
             return self._rag
 
-        from lightrag import LightRAG
+        from lightrag import LightRAG, QueryParam  # noqa: F811
         from lightrag.utils import wrap_embedding_func_with_attrs
         from lightrag.kg.shared_storage import initialize_pipeline_status
 
@@ -221,6 +221,22 @@ class KnowledgeGraphService:
                 )
 
         return ingested
+
+    async def query(self, query: str, mode: str = "hybrid") -> str:
+        """Query the knowledge graph for entities and relationships.
+
+        Args:
+            query: The search query.
+            mode: LightRAG query mode — 'hybrid', 'local', 'global', or 'naive'.
+
+        Returns:
+            String with entity/relationship context, or empty string on failure.
+        """
+        from lightrag import QueryParam
+
+        rag = await self._get_rag()
+        result = await rag.aquery(query, param=QueryParam(mode=mode))
+        return result or ""
 
     async def cleanup(self) -> None:
         """Finalize storages on shutdown."""

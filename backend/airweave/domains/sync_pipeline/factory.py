@@ -156,6 +156,10 @@ class SyncFactory(SyncFactoryProtocol):
             sync_overrides=sync.sync_config,
             job_overrides=sync_job.sync_config or execution_config,
         )
+
+        # Force full sync should also skip hash comparison so entities are re-inserted
+        if force_full_sync:
+            resolved_config.behavior.skip_hash_comparison = True
         logger.debug(
             f"Resolved layered sync config: handlers={resolved_config.handlers.model_dump()}, "
             f"destinations={resolved_config.destinations.model_dump()}"
