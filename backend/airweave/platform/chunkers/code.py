@@ -26,7 +26,7 @@ class CodeChunker(BaseChunker):
 
     # Configuration constants
     MAX_TOKENS_PER_CHUNK = 8192  # OpenAI hard limit (safety net)
-    CHUNK_SIZE = 2048  # Target chunk size (can be exceeded by large AST nodes)
+    CHUNK_SIZE = 512  # Target chunk size (can be exceeded by large AST nodes)
     TOKENIZER = "cl100k_base"  # For accurate OpenAI token counting
 
     # Singleton instance

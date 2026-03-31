@@ -124,7 +124,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 
         # 5. If no federated sources, vector DB already has correct limit/offset
         if not federated_sources:
-            return SearchResults(results=vector_results)
+            return SearchResults(results=_deduplicate_by_entity(vector_results, original_limit))
 
         # 6. We over-fetched from vector DB (limit=offset+limit, offset=0) for RRF.
         #    Filter federated results in-memory and merge, or slice vector-only.
@@ -132,12 +132,12 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 
         if fed_filtered:
             merged = self._merge_with_rrf(vector_results, fed_filtered)
-            return SearchResults(results=merged[original_offset : original_offset + original_limit])
+            paginated = merged[original_offset : original_offset + original_limit]
+            return SearchResults(results=_deduplicate_by_entity(paginated, original_limit))
 
         # All federated results filtered out — slice vector results to original window
-        return SearchResults(
-            results=vector_results[original_offset : original_offset + original_limit]
-        )
+        paginated = vector_results[original_offset : original_offset + original_limit]
+        return SearchResults(results=_deduplicate_by_entity(paginated, original_limit))
 
     async def _execute_vector_search(
         self,
@@ -431,6 +431,46 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             result_map[eid].model_copy(update={"relevance_score": scores[eid]})
             for eid in sorted_ids
         ]
+
+
+# ── Entity-level deduplication (module-level for testability) ────────
+
+
+def _deduplicate_by_entity(
+    results: list[SearchResult],
+    limit: int,
+) -> list[SearchResult]:
+    """Collapse multiple chunks from the same parent entity into the best-scoring one.
+
+    Chunks share an original_entity_id (stored in airweave_system_metadata).
+    When the same document produces several chunks (e.g., "{id}__chunk_0",
+    "{id}__chunk_1", ...), only the highest-relevance_score chunk is kept.
+    This improves result diversity for MCP/RAG consumers.
+
+    The input order (by relevance) is preserved: the first occurrence of each
+    original_entity_id wins because results are already sorted by score desc.
+    """
+    seen: dict[str, SearchResult] = {}
+    for result in results:
+        orig_id = result.airweave_system_metadata.original_entity_id
+        if orig_id not in seen:
+            seen[orig_id] = result
+        elif result.relevance_score > seen[orig_id].relevance_score:
+            # Unlikely given results arrive sorted, but guard against unsorted merges.
+            seen[orig_id] = result
+
+    # Preserve the original relevance ordering.
+    deduplicated: list[SearchResult] = []
+    added: set[str] = set()
+    for result in results:
+        orig_id = result.airweave_system_metadata.original_entity_id
+        if orig_id not in added and seen[orig_id] is result:
+            deduplicated.append(result)
+            added.add(orig_id)
+            if len(deduplicated) >= limit:
+                break
+
+    return deduplicated
 
 
 # ── In-memory filter helpers (module-level for testability) ──────────

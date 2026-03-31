@@ -23,8 +23,8 @@ class SemanticChunker(BaseChunker):
 
     # Configuration constants
     MAX_TOKENS_PER_CHUNK = 8192  # OpenAI text-embedding-3-small hard limit (safety net)
-    SEMANTIC_CHUNK_SIZE = 4096  # Soft target for semantic groups (better search quality)
-    OVERLAP_TOKENS = 128  # Token overlap between chunks
+    SEMANTIC_CHUNK_SIZE = 512  # Soft target for semantic groups (better RAG precision)
+    OVERLAP_TOKENS = 64  # Token overlap between chunks
 
     # SemanticChunker configuration
     # Available embedding models (sorted by speed, fastest first):
@@ -43,7 +43,7 @@ class SemanticChunker(BaseChunker):
     # Final search embeddings use OpenAI text-embedding-3-small separately.
     EMBEDDING_MODEL = "minishlab/potion-base-8M"  # Default: Good speed/quality balance
 
-    SIMILARITY_THRESHOLD = 0.01  # 0-1: Lower=larger chunks, Higher=smaller chunks
+    SIMILARITY_THRESHOLD = 0.3  # 0-1: Lower=larger chunks, Higher=smaller chunks
     SIMILARITY_WINDOW = 10  # Number of sentences to compare for similarity
     MIN_SENTENCES_PER_CHUNK = 1  # Prevent tiny fragment chunks
     MIN_CHARACTERS_PER_SENTENCE = 24  # Minimum chars per sentence
