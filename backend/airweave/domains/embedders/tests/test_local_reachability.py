@@ -33,15 +33,15 @@ def _make_entry(embedder_class: type, **overrides) -> DenseEmbedderEntry:
     return DenseEmbedderEntry(**defaults)
 
 
-def _mock_client(get_return=None, get_side_effect=None):
+def _mock_client(post_return=None, post_side_effect=None):
     """Create a mock httpx.Client context manager."""
     client = MagicMock()
-    if get_side_effect:
-        client.get.side_effect = get_side_effect
+    if post_side_effect:
+        client.post.side_effect = post_side_effect
     else:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
-        client.get.return_value = get_return or resp
+        client.post.return_value = post_return or resp
     client.__enter__ = MagicMock(return_value=client)
     client.__exit__ = MagicMock(return_value=False)
     return client
@@ -71,7 +71,9 @@ class TestValidateLocalReachability:
         entry = _make_entry(LocalDenseEmbedder)
         _validate_local_reachability(entry)
 
-        client.get.assert_called_once_with("http://localhost:9878/health")
+        client.post.assert_called_once_with(
+            "http://localhost:9878/vectors", json={"text": "health check"}
+        )
 
     @patch("airweave.domains.embedders.config.settings")
     @patch("airweave.domains.embedders.config.httpx")
@@ -83,7 +85,7 @@ class TestValidateLocalReachability:
         mock_httpx.TimeoutException = httpx.TimeoutException
         mock_httpx.HTTPStatusError = httpx.HTTPStatusError
         mock_httpx.Client.return_value = _mock_client(
-            get_side_effect=httpx.ConnectError("Connection refused")
+            post_side_effect=httpx.ConnectError("Connection refused")
         )
 
         entry = _make_entry(LocalDenseEmbedder)
@@ -100,7 +102,7 @@ class TestValidateLocalReachability:
         mock_httpx.TimeoutException = httpx.TimeoutException
         mock_httpx.HTTPStatusError = httpx.HTTPStatusError
         mock_httpx.Client.return_value = _mock_client(
-            get_side_effect=httpx.TimeoutException("timed out")
+            post_side_effect=httpx.TimeoutException("timed out")
         )
 
         entry = _make_entry(LocalDenseEmbedder)

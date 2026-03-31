@@ -16,6 +16,8 @@ SKIP_LOCAL_EMBEDDINGS="${SKIP_LOCAL_EMBEDDINGS:-}"
 SKIP_FRONTEND="${SKIP_FRONTEND:-}"
 SKIP_CONNECT="${SKIP_CONNECT:-}"
 ENABLE_DOCLING="${ENABLE_DOCLING:-}"
+ENABLE_RUSTFS="${ENABLE_RUSTFS:-}"
+ENABLE_MCP="${ENABLE_MCP:-}"
 VERBOSE="${VERBOSE:-}"
 QUIET="${QUIET:-}"
 
@@ -243,6 +245,7 @@ ${BOLD}Options:${RESET}
   --skip-frontend           Don't start frontend UI
   --skip-connect            Don't start connect widget
   --enable-docling          Start docling-serve for local OCR
+  --enable-rustfs           Start RustFS S3-compatible object storage
 
 ${BOLD}Actions:${RESET}
   --restart                 Restart existing containers (preserves data)
@@ -255,6 +258,7 @@ ${BOLD}Environment variables:${RESET}
   SKIP_FRONTEND=1           Same as --skip-frontend
   SKIP_CONNECT=1            Same as --skip-connect
   ENABLE_DOCLING=1          Same as --enable-docling
+  ENABLE_RUSTFS=1           Same as --enable-rustfs
   VERBOSE=1                 Same as --verbose
   QUIET=1                   Same as --quiet
   NO_COLOR=1                Disable colored output
@@ -288,6 +292,8 @@ while [[ $# -gt 0 ]]; do
         --skip-frontend) SKIP_FRONTEND=1; shift ;;
         --skip-connect) SKIP_CONNECT=1; shift ;;
         --enable-docling) ENABLE_DOCLING=1; shift ;;
+        --enable-rustfs) ENABLE_RUSTFS=1; shift ;;
+        --enable-mcp) ENABLE_MCP=1; shift ;;
         --restart) ACTION_RESTART=1; shift ;;
         --recreate) ACTION_RECREATE=1; shift ;;
         --destroy) ACTION_DESTROY=1; shift ;;
@@ -313,6 +319,7 @@ print_banner
 # -----------------------------------------------------------------------------
 
 COMPOSE_FILE="docker/docker-compose.yml"
+COMPOSE_PROJECT_NAME_VALUE="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
 
 # Find compose command
 if docker compose version >/dev/null 2>&1; then
@@ -360,7 +367,7 @@ if [[ -n $ACTION_DESTROY ]]; then
     fi
 
     log_info "Stopping and removing containers and volumes..."
-    $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" down --volumes --remove-orphans 2>/dev/null || true
+    $COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" down --volumes --remove-orphans 2>/dev/null || true
 
     log_success "All Airweave resources removed"
     echo ""
@@ -371,20 +378,20 @@ fi
 # Handle --recreate: Remove containers and volumes, then continue with fresh start
 if [[ -n $ACTION_RECREATE ]]; then
     log_info "Recreating containers..."
-    $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" down --volumes --remove-orphans 2>/dev/null || true
+    $COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" down --volumes --remove-orphans 2>/dev/null || true
     log_success "Old containers and volumes removed"
 fi
 
 # Handle --restart: Restart existing containers and skip to health checks
 if [[ -n $ACTION_RESTART ]]; then
     # Validate containers exist before attempting restart
-    if [[ -z $($COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" ps -a -q 2>/dev/null) ]]; then
+    if [[ -z $($COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" ps -a -q 2>/dev/null) ]]; then
         log_error "No containers to restart. Run '$SCRIPT_NAME' first."
         exit 1
     fi
 
     log_info "Restarting services..."
-    $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" restart
+    $COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" restart
     log_success "Services restarted"
 
     # Skip container creation and env setup, but still do health checks
@@ -399,11 +406,11 @@ fi
 # Handle existing containers (normal startup without action flags)
 if [[ -z $ACTION_RECREATE && -z $ACTION_RESTART && -z $SKIP_CONTAINER_CREATION ]]; then
     # Use compose to detect containers managed by this compose file
-    existing_containers=$($COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" ps -a -q 2>/dev/null)
+    existing_containers=$($COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" ps -a -q 2>/dev/null)
 
     if [[ -n $existing_containers ]]; then
         # Check if containers are running
-        running_containers=$($COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" ps -q 2>/dev/null)
+        running_containers=$($COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" ps -q 2>/dev/null)
 
         if [[ -n $running_containers ]]; then
             # Containers are already running - just show status
@@ -417,7 +424,7 @@ if [[ -z $ACTION_RECREATE && -z $ACTION_RESTART && -z $SKIP_CONTAINER_CREATION ]
             log_info "Starting existing containers..."
 
             # Start the existing containers
-            $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" up -d
+            $COMPOSE_CMD --env-file .env -p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE" up -d
             log_success "Containers started"
             SKIP_CONTAINER_CREATION=1
             SKIP_ENV_SETUP=1
@@ -524,6 +531,16 @@ USE_FRONTEND=true
 USE_VESPA=true  # Always enabled
 USE_CONNECT=true
 USE_DOCLING=false
+USE_RUSTFS=false
+USE_MCP=false
+FRONTEND_LOCAL_DEVELOPMENT_PORT=$(get_env_value "FRONTEND_LOCAL_DEVELOPMENT_PORT")
+FRONTEND_LOCAL_DEVELOPMENT_PORT=${FRONTEND_LOCAL_DEVELOPMENT_PORT:-8080}
+CONNECT_LOCAL_DEVELOPMENT_PORT=$(get_env_value "CONNECT_LOCAL_DEVELOPMENT_PORT")
+CONNECT_LOCAL_DEVELOPMENT_PORT=${CONNECT_LOCAL_DEVELOPMENT_PORT:-8082}
+VESPA_LOCAL_DEVELOPMENT_PORT=$(get_env_value "VESPA_LOCAL_DEVELOPMENT_PORT")
+VESPA_LOCAL_DEVELOPMENT_PORT=${VESPA_LOCAL_DEVELOPMENT_PORT:-8081}
+DOCLING_LOCAL_DEVELOPMENT_PORT=$(get_env_value "DOCLING_LOCAL_DEVELOPMENT_PORT")
+DOCLING_LOCAL_DEVELOPMENT_PORT=${DOCLING_LOCAL_DEVELOPMENT_PORT:-15011}
 
 # Detect available API keys
 openai_key=$(get_env_value "OPENAI_API_KEY")
@@ -602,6 +619,16 @@ if [[ -z $SKIP_CONTAINER_CREATION ]]; then
         log_note "Enabling docling-serve for local OCR"
         USE_DOCLING=true
     fi
+
+    if [[ -n $ENABLE_RUSTFS ]]; then
+        log_note "Enabling RustFS S3-compatible storage"
+        USE_RUSTFS=true
+    fi
+
+    if [[ -n $ENABLE_MCP ]]; then
+        log_note "Enabling MCP server (Streamable HTTP)"
+        USE_MCP=true
+    fi
 else
     # When reusing existing containers, just set flags based on skip settings
     if [[ -n $openai_key && $openai_key != "your-api-key-here" ]] || [[ -n $SKIP_LOCAL_EMBEDDINGS ]]; then
@@ -621,6 +648,9 @@ else
     if [[ -n $ENABLE_DOCLING ]]; then
         USE_DOCLING=true
     fi
+    if [[ -n $ENABLE_RUSTFS ]]; then
+        USE_RUSTFS=true
+    fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -628,12 +658,14 @@ fi
 # -----------------------------------------------------------------------------
 if [[ -z $SKIP_CONTAINER_CREATION ]]; then
     # Build compose command with profiles
-    compose_args=(--env-file .env -f docker/docker-compose.yml)
+    compose_args=(-p "$COMPOSE_PROJECT_NAME_VALUE" -f "$COMPOSE_FILE")
+    [[ -f .env ]] && compose_args=(--env-file .env "${compose_args[@]}")
     [[ $USE_LOCAL_EMBEDDINGS == true ]] && compose_args+=(--profile local-embeddings)
     [[ $USE_FRONTEND == true ]] && compose_args+=(--profile frontend)
     [[ $USE_CONNECT == true ]] && compose_args+=(--profile connect)
     [[ $USE_VESPA == true ]] && compose_args+=(--profile vespa)
     [[ $USE_DOCLING == true ]] && compose_args+=(--profile docling)
+    [[ $USE_RUSTFS == true ]] && compose_args+=(--profile rustfs)
 
     if ! $COMPOSE_CMD "${compose_args[@]}" up -d; then
         log_error "Failed to start Docker services"
@@ -666,7 +698,7 @@ if [[ -z $SKIP_HEALTH_CHECKS ]]; then
         fi
 
         if [[ $init_status == "exited" && $init_exit_code == "0" ]]; then
-            doc_status=$(run_with_timeout 5 curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/document/v1/ 2>/dev/null || echo "000")
+            doc_status=$(run_with_timeout 5 curl -s -o /dev/null -w "%{http_code}" "http://localhost:${VESPA_LOCAL_DEVELOPMENT_PORT}/document/v1/" 2>/dev/null || echo "000")
             [[ $doc_status != "000" && $doc_status -ge 100 ]] 2>/dev/null
         else
             return 1
@@ -678,7 +710,7 @@ if [[ -z $SKIP_HEALTH_CHECKS ]]; then
         echo "Vespa troubleshooting:"
         echo "  1. Check Vespa logs: $CONTAINER_CMD logs airweave-vespa"
         echo "  2. Check init logs:  $CONTAINER_CMD logs airweave-vespa-init"
-        echo "  3. Check health:     curl http://localhost:8081/state/v1/health"
+        echo "  3. Check health:     curl http://localhost:${VESPA_LOCAL_DEVELOPMENT_PORT}/state/v1/health"
         exit 1
     fi
 
@@ -720,8 +752,8 @@ else
 fi
 
 if [[ $USE_FRONTEND == true ]]; then
-    if curl -sf http://localhost:8080 >/dev/null 2>&1; then
-        log_success "Frontend UI     http://localhost:8080"
+    if curl -sf "http://localhost:${FRONTEND_LOCAL_DEVELOPMENT_PORT}" >/dev/null 2>&1; then
+        log_success "Frontend UI     http://localhost:${FRONTEND_LOCAL_DEVELOPMENT_PORT}"
     else
         log_error "Frontend UI     Not responding"
         services_healthy=false
@@ -731,8 +763,8 @@ else
 fi
 
 if [[ $USE_CONNECT == true ]]; then
-    if curl -sf http://localhost:8082 >/dev/null 2>&1; then
-        log_success "Connect Widget  http://localhost:8082"
+    if curl -sf "http://localhost:${CONNECT_LOCAL_DEVELOPMENT_PORT}" >/dev/null 2>&1; then
+        log_success "Connect Widget  http://localhost:${CONNECT_LOCAL_DEVELOPMENT_PORT}"
     else
         log_error "Connect Widget  Not responding"
         services_healthy=false
@@ -745,8 +777,8 @@ subsection "Other services:"
 
 printf "📊 Temporal UI     http://localhost:8088\n"
 printf "🗄️ PostgreSQL      localhost:5432\n"
-if curl -sf http://localhost:8081/state/v1/health 2>/dev/null | grep -q '"up"'; then
-    printf "🔎 Vespa           http://localhost:8081\n"
+if curl -sf "http://localhost:${VESPA_LOCAL_DEVELOPMENT_PORT}/state/v1/health" 2>/dev/null | grep -q '"up"'; then
+    printf "🔎 Vespa           http://localhost:%s\n" "$VESPA_LOCAL_DEVELOPMENT_PORT"
 else
     printf "⚠️  Vespa           Not responding\n"
 fi
@@ -755,6 +787,10 @@ if [[ $USE_LOCAL_EMBEDDINGS == true ]]; then
     printf "🤖 Embeddings      http://localhost:9878 (local)\n"
 else
     printf "🤖 Embeddings      OpenAI API\n"
+fi
+
+if curl -sf "http://localhost:${DOCLING_LOCAL_DEVELOPMENT_PORT}/ready" >/dev/null 2>&1; then
+    printf "📄 Docling OCR     http://localhost:%s\n" "$DOCLING_LOCAL_DEVELOPMENT_PORT"
 fi
 
 # Help text (always shown)

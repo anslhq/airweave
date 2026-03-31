@@ -45,6 +45,7 @@ class LLMModel(str, Enum):
     QWEN_3_5_DEDICATED = "qwen-3.5-dedicated"
     ZAI_GLM_5_DEDICATED = "zai-glm-5-dedicated"
     MINIMAX_M2_5 = "minimax-m2.5"
+    GPT_5_2 = "gpt-5.2"
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,17 @@ MODEL_REGISTRY: dict[LLMProvider, dict[LLMModel, LLMModelSpec]] = {
             thinking_config=ThinkingConfig(param_name="reasoning", param_value=False),
             input_price_factor=0.30,
             output_price_factor=1.20,
+        ),
+        # ── GPT-5.2 (OpenAI-compatible, e.g. local proxy) ────────
+        LLMModel.GPT_5_2: LLMModelSpec(
+            api_model_name="gpt-5.2",
+            context_window=274_000,
+            max_output_tokens=16_384,
+            required_tokenizer_type=TokenizerType.TIKTOKEN,
+            required_tokenizer_encoding=TokenizerEncoding.O200K_HARMONY,
+            thinking_config=ThinkingConfig(param_name="reasoning", param_value=False),
+            input_price_factor=1.0,
+            output_price_factor=1.0,
         ),
     },
 }

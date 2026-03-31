@@ -67,6 +67,7 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_HOST=redis
       - TEXT2VEC_INFERENCE_URL=http://text2vec-transformers:8080
+      - DOCLING_BASE_URL=http://docling:5001
       - VESPA_URL=http://vespa
       - VESPA_PORT=8081
       # Environment configuration (can be overridden in .env)
@@ -157,7 +158,13 @@ services:
       ENABLE_CUDA: 0
       WORKERS_PER_NODE: 1
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/health" ]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys, urllib.request; req = urllib.request.Request('http://localhost:8080/vectors', data=b'{\"text\":\"health check\"}', headers={'Content-Type': 'application/json'}); urllib.request.urlopen(req, timeout=5).read(); sys.exit(0)",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -229,6 +236,7 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_HOST=redis
       - TEXT2VEC_INFERENCE_URL=http://text2vec-transformers:8080
+      - DOCLING_BASE_URL=http://docling:5001
       - VESPA_URL=http://vespa
       - VESPA_PORT=8081
       # Environment configuration (can be overridden in .env)
@@ -263,7 +271,7 @@ services:
     image: vespaengine/vespa:8
     hostname: vespa
     ports:
-      - "8081:8081" # Query/Document API
+      - "${VESPA_LOCAL_DEVELOPMENT_PORT:-8081}:8081" # Query/Document API
       - "19071:19071" # Config server (for deployment)
     volumes:
       - vespa_data:/opt/vespa/var
@@ -338,7 +346,97 @@ services:
       retries: 30
     restart: on-failure
 
+  # MCP Server — Streamable HTTP transport for AI assistant integration
+  mcp:
+    container_name: airweave-mcp
+    build:
+      context: ../mcp
+      dockerfile: Dockerfile
+    ports:
+      - "${MCP_LOCAL_DEVELOPMENT_PORT:-8083}:8080"
+    environment:
+      - AIRWEAVE_BASE_URL=http://backend:8001
+      - NODE_ENV=production
+      - PORT=8080
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: on-failure
+
+  # RustFS — S3-compatible object storage (opt-in via --profile rustfs)
+  rustfs:
+    container_name: airweave-rustfs
+    image: rustfs/rustfs:latest
+    profiles:
+      - rustfs
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      - RUSTFS_VOLUMES=/data/rustfs{0..3}
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_CONSOLE_ENABLE=true
+      - RUSTFS_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}
+      - RUSTFS_OBS_LOGGER_LEVEL=info
+      - RUSTFS_OBJECT_CACHE_ENABLE=true
+      - RUSTFS_OBJECT_CACHE_TTL_SECS=300
+    volumes:
+      - rustfs_data:/data
+      - rustfs_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: on-failure
+
+  # Creates the airweave bucket in RustFS on first boot
+  rustfs-init:
+    container_name: airweave-rustfs-init
+    image: alpine:3.19
+    profiles:
+      - rustfs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl >/dev/null 2>&1
+        echo "Waiting for RustFS..."
+        until curl -sf http://rustfs:9000/health >/dev/null 2>&1; do sleep 2; done
+        BUCKET=$${RUSTFS_BUCKET:-airweave}
+        KEY=$${RUSTFS_ACCESS_KEY:-rustfsadmin}
+        SECRET=$${RUSTFS_SECRET_KEY:-rustfsadmin}
+        echo "RustFS is up. Creating bucket '$$BUCKET'..."
+        RC=$$(curl -s -o /dev/null -w "%{http_code}" \
+          -X PUT "http://rustfs:9000/$$BUCKET" \
+          -H "Host: rustfs:9000" \
+          -u "$$KEY:$$SECRET")
+        if [ "$$RC" = "200" ] || [ "$$RC" = "409" ]; then
+          echo "Bucket '$$BUCKET' ready (HTTP $$RC)"
+        else
+          echo "WARNING: Bucket creation returned HTTP $$RC (may need manual creation via console)"
+        fi
+    environment:
+      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}
+      - RUSTFS_BUCKET=${STORAGE_AWS_BUCKET:-airweave}
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres_data:
   redis_data:
   vespa_data:
+  rustfs_data:
+  rustfs_logs:
