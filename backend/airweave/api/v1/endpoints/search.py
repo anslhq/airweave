@@ -75,7 +75,10 @@ async def instant_search(
     )
 
     results = await service.search(db, ctx, readable_id, request)
-    return SearchV2Response(results=results.results)
+    return SearchV2Response(
+        results=results.results,
+        knowledge_graph_context=results.knowledge_graph_context,
+    )
 
 
 @router.post(
@@ -111,7 +114,10 @@ async def classic_search(
     )
 
     results = await service.search(db, ctx, readable_id, request)
-    return SearchV2Response(results=results.results)
+    return SearchV2Response(
+        results=results.results,
+        knowledge_graph_context=results.knowledge_graph_context,
+    )
 
 
 @router.post(
@@ -151,7 +157,10 @@ async def agentic_search(
     # Service emits SearchCompletedEvent internally
     results = await service.search(db, ctx, readable_id, request)
     truncated = results.results[: request.limit] if request.limit else results.results
-    return SearchV2Response(results=truncated)
+    return SearchV2Response(
+        results=truncated,
+        knowledge_graph_context=results.knowledge_graph_context,
+    )
 
 
 # ── Streaming agentic search ──────────────────────────────────────────

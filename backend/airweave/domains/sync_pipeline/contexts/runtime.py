@@ -30,3 +30,7 @@ class SyncRuntime:
     entity_tracker: "EntityTracker"
     cursor: Optional["SyncCursor"] = None
     destinations: List["BaseDestination"] = field(default_factory=list)
+
+    # Knowledge graph text collector — populated by entity pipeline during
+    # text building, consumed by orchestrator's KG ingestion phase.
+    kg_texts: List[str] = field(default_factory=list)

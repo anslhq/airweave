@@ -41,6 +41,7 @@ from airweave.adapters.metrics import (
 )
 from airweave.adapters.pubsub.redis import RedisPubSub
 from airweave.adapters.reranker.cohere import CohereReranker
+from airweave.adapters.reranker.cross_encoder import CrossEncoderReranker
 from airweave.adapters.tokenizer.registry import get_model_spec as get_tokenizer_spec
 from airweave.adapters.tokenizer.tiktoken import TiktokenTokenizer
 from airweave.adapters.webhooks.endpoint_verifier import HttpEndpointVerifier
@@ -1329,10 +1330,15 @@ def _create_search_services(
     llm = _build_llm_chain(settings, config, circuit_breaker)
 
     # 3. Reranker (optional)
+    #    Cohere is preferred when an API key is available; otherwise fall back
+    #    to a local cross-encoder (BAAI/bge-reranker-v2-m3 via sentence-transformers).
     reranker = None
     if getattr(settings, "COHERE_API_KEY", None):
         reranker = CohereReranker(api_key=settings.COHERE_API_KEY)
         logger.info("[SearchFactory] Cohere reranker enabled")
+    else:
+        reranker = CrossEncoderReranker()
+        logger.info("[SearchFactory] Cross-encoder reranker enabled (bge-reranker-v2-m3)")
 
     # 4. CollectionMetadataBuilder
     metadata_builder = CollectionMetadataBuilder(
@@ -1357,6 +1363,7 @@ def _create_search_services(
         sc_repo=sc_repo,
         source_registry=source_registry,
         source_lifecycle=source_lifecycle,
+        reranker=reranker,
     )
 
     # 6. Per-tier services

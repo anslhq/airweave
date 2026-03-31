@@ -3,11 +3,15 @@
 Merge filters -> embed query -> compile DB query -> execute -> SearchResults.
 When federated sources exist, also searches them with plan.query.primary,
 applies filters in-memory, and merges results using Reciprocal Rank Fusion.
+
+Knowledge graph context is fetched in parallel when available, providing
+entity/relationship context alongside vector search results.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -15,6 +19,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
+from airweave.core.protocols.reranker import RerankerProtocol
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol, SparseEmbedderProtocol
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
 from airweave.domains.search.builders.search_plan import SearchPlanBuilder
@@ -42,8 +47,22 @@ from airweave.domains.sources.protocols import (
 from airweave.platform.entities._base import BaseEntity
 from airweave.platform.sources._base import BaseSource
 
+# Knowledge graph integration — graceful degradation if adapter not yet available
+try:
+    from airweave.adapters.knowledge_graph.lightrag_adapter import KnowledgeGraphService
+
+    _KG_AVAILABLE = True
+except ImportError:
+    _KG_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
 # RRF constant (standard value used in hybrid search systems)
 RRF_K = 60
+
+# When a reranker is configured, fetch this many times the requested limit
+# from the vector DB so the reranker has a wider candidate pool to score.
+RERANK_OVERFETCH_MULTIPLIER = 3
 
 
 class SearchPlanExecutor(SearchPlanExecutorProtocol):
@@ -57,6 +76,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
     5. Search federated sources with plan.query.primary
     6. Apply filters in-memory to federated results
     7. Merge via RRF and paginate
+    8. (Optional) Rerank results with cross-encoder and trim to final limit
     """
 
     def __init__(
@@ -67,14 +87,16 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         sc_repo: SourceConnectionRepositoryProtocol,
         source_registry: SourceRegistryProtocol,
         source_lifecycle: SourceLifecycleServiceProtocol,
+        reranker: RerankerProtocol | None = None,
     ) -> None:
-        """Initialize with embedders, vector database, and federated source dependencies."""
+        """Initialize with embedders, vector database, federated source deps, and optional reranker."""
         self._dense_embedder = dense_embedder
         self._sparse_embedder = sparse_embedder
         self._vector_db = vector_db
         self._sc_repo = sc_repo
         self._source_registry = source_registry
         self._source_lifecycle = source_lifecycle
+        self._reranker = reranker
 
     async def execute(
         self,
@@ -95,16 +117,28 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         # 3. Adjust limit/offset for RRF pagination (if federated sources exist)
         original_limit = complete_plan.limit
         original_offset = complete_plan.offset
+
+        # When a reranker is configured, over-fetch so it has a wider pool to score.
+        rerank_overfetch = RERANK_OVERFETCH_MULTIPLIER if self._reranker else 1
+        effective_limit = original_limit * rerank_overfetch
+
         if federated_sources:
             complete_plan = complete_plan.model_copy(
                 update={
-                    "limit": original_offset + original_limit,
+                    "limit": original_offset + effective_limit,
                     "offset": 0,
                 }
             )
+        elif rerank_overfetch > 1:
+            # No federated sources but reranker is active — widen the fetch window.
+            complete_plan = complete_plan.model_copy(
+                update={
+                    "limit": effective_limit,
+                }
+            )
 
-        # 4. Run vector DB search and federated search in parallel
-        fetch_limit = original_offset + original_limit
+        # 4. Run vector DB search, federated search, and KG query in parallel
+        fetch_limit = original_offset + effective_limit
 
         vector_task = asyncio.create_task(self._execute_vector_search(complete_plan, collection_id))
 
@@ -119,12 +153,21 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
                 )
             )
 
+        kg_task = asyncio.create_task(
+            _query_knowledge_graph(plan.query.primary, collection_readable_id)
+        )
+
         vector_results = await vector_task
         fed_results = await fed_task if fed_task else []
+        kg_context = await kg_task
 
         # 5. If no federated sources, vector DB already has correct limit/offset
         if not federated_sources:
-            return SearchResults(results=_deduplicate_by_entity(vector_results, original_limit))
+            deduplicated = _deduplicate_by_entity(vector_results, effective_limit)
+            reranked = await self._maybe_rerank(
+                plan.query.primary, deduplicated, original_limit
+            )
+            return SearchResults(results=reranked, knowledge_graph_context=kg_context)
 
         # 6. We over-fetched from vector DB (limit=offset+limit, offset=0) for RRF.
         #    Filter federated results in-memory and merge, or slice vector-only.
@@ -132,12 +175,45 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 
         if fed_filtered:
             merged = self._merge_with_rrf(vector_results, fed_filtered)
-            paginated = merged[original_offset : original_offset + original_limit]
-            return SearchResults(results=_deduplicate_by_entity(paginated, original_limit))
+            paginated = merged[original_offset : original_offset + effective_limit]
+            deduplicated = _deduplicate_by_entity(paginated, effective_limit)
+            reranked = await self._maybe_rerank(
+                plan.query.primary, deduplicated, original_limit
+            )
+            return SearchResults(results=reranked, knowledge_graph_context=kg_context)
 
         # All federated results filtered out — slice vector results to original window
-        paginated = vector_results[original_offset : original_offset + original_limit]
-        return SearchResults(results=_deduplicate_by_entity(paginated, original_limit))
+        paginated = vector_results[original_offset : original_offset + effective_limit]
+        deduplicated = _deduplicate_by_entity(paginated, effective_limit)
+        reranked = await self._maybe_rerank(
+            plan.query.primary, deduplicated, original_limit
+        )
+        return SearchResults(results=reranked, knowledge_graph_context=kg_context)
+
+    async def _maybe_rerank(
+        self,
+        query: str,
+        results: list[SearchResult],
+        final_limit: int,
+    ) -> list[SearchResult]:
+        """Rerank results if a reranker is configured, then trim to final_limit.
+
+        When no reranker is present, simply trims the list to final_limit
+        (no-op when already at or below the limit).
+        """
+        if not self._reranker or not results:
+            return results[:final_limit]
+
+        documents = [r.textual_representation for r in results]
+        reranked = await self._reranker.rerank(
+            query=query,
+            documents=documents,
+            top_n=final_limit,
+        )
+        return [
+            results[r.index].model_copy(update={"relevance_score": r.relevance_score})
+            for r in reranked
+        ]
 
     async def _execute_vector_search(
         self,
@@ -599,3 +675,29 @@ def _matches_group(result: SearchResult, group: FilterGroup) -> bool:
 def _matches_any_group(result: SearchResult, groups: list[FilterGroup]) -> bool:
     """Check if a result matches ANY group (OR semantics)."""
     return any(_matches_group(result, group) for group in groups)
+
+
+# ── Knowledge graph query (module-level for testability) ──────────────
+
+
+async def _query_knowledge_graph(query: str, collection_readable_id: str) -> str:
+    """Query the knowledge graph for a collection, returning entity/relationship context.
+
+    Runs in parallel with vector search. Returns empty string on any failure
+    (missing KG data, adapter not available, runtime errors) so search always
+    succeeds even without KG context.
+    """
+    if not _KG_AVAILABLE:
+        return ""
+
+    try:
+        kg_service = KnowledgeGraphService(collection_readable_id=collection_readable_id)
+        result = await kg_service.query(query, mode="hybrid")
+        return result or ""
+    except Exception:
+        logger.debug(
+            "Knowledge graph query failed for collection=%s, returning empty context",
+            collection_readable_id,
+            exc_info=True,
+        )
+        return ""

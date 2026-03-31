@@ -124,6 +124,18 @@ class SyncOrchestrator:
                     f"✅ PHASE 2.5 complete ({time.time() - phase_start:.2f}s)"
                 )
 
+            # Phase 2.7: Knowledge graph ingestion (fault-tolerant)
+            if self.runtime.kg_texts:
+                phase_start = time.time()
+                self.sync_context.logger.info(
+                    f"🚀 PHASE 2.7: Knowledge graph ingestion "
+                    f"({len(self.runtime.kg_texts)} texts)..."
+                )
+                await self._ingest_knowledge_graph()
+                self.sync_context.logger.info(
+                    f"✅ PHASE 2.7 complete ({time.time() - phase_start:.2f}s)"
+                )
+
             # Phase 3: Cleanup orphaned entities
             phase_start = time.time()
             self.sync_context.logger.info("🚀 PHASE 3: Cleanup orphaned entities (if needed)...")
@@ -514,6 +526,53 @@ class SyncOrchestrator:
                 source_type=ctx.source_short_name,
             )
         )
+
+    async def _ingest_knowledge_graph(self) -> None:
+        """Ingest collected entity texts into the per-collection knowledge graph.
+
+        Uses LightRAG for entity/relationship extraction. Fault-tolerant:
+        if KG ingestion fails for any reason, the error is logged but the
+        sync continues successfully.
+        """
+        texts = self.runtime.kg_texts
+        if not texts:
+            return
+
+        collection_readable_id = str(self.sync_context.collection.readable_id)
+
+        try:
+            from airweave.adapters.knowledge_graph import KnowledgeGraphService
+
+            kg = KnowledgeGraphService(
+                collection_readable_id=collection_readable_id
+            )
+
+            self.sync_context.logger.info(
+                f"[KG] Starting knowledge graph ingestion for collection "
+                f"'{collection_readable_id}' with {len(texts)} entity texts"
+            )
+
+            ingested = await kg.ingest_batch(texts)
+
+            self.sync_context.logger.info(
+                f"[KG] Knowledge graph ingestion complete: "
+                f"{ingested}/{len(texts)} texts ingested for collection "
+                f"'{collection_readable_id}'"
+            )
+
+            await kg.cleanup()
+
+        except Exception as e:
+            # Fault-tolerant: KG failure must never fail the sync
+            self.sync_context.logger.warning(
+                f"[KG] Knowledge graph ingestion failed for collection "
+                f"'{collection_readable_id}': {get_error_message(e)}. "
+                f"Sync will continue without KG data.",
+                exc_info=True,
+            )
+        finally:
+            # Free the collected texts to release memory
+            self.runtime.kg_texts.clear()
 
     async def _complete_sync(self) -> None:
         """Mark sync job as completed with final statistics."""
