@@ -2,12 +2,29 @@
 
 import { SearchV2Response, SearchResult, SearchTier } from "../api/types.js";
 
+const EXCERPT_MAX_CHARS = 500;
+
+/**
+ * Truncate text to a maximum character length, breaking at a word boundary.
+ * Appends "…" when truncated.
+ */
+function truncateText(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    const truncated = text.slice(0, maxChars);
+    const lastSpace = truncated.lastIndexOf(" ");
+    return (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated) + "…";
+}
+
 export function formatSearchResponse(
     searchResponse: SearchV2Response,
     tier: SearchTier,
     collection: string,
+    limit: number = 100,
 ) {
     const results = searchResponse.results ?? [];
+    // Include full content only for small result sets (limit <= 5)
+    const includeFullContent = limit <= 5;
+
     const formattedResults = results
         .map((result: SearchResult, index: number) => {
             const parts = [
@@ -24,9 +41,13 @@ export function formatSearchResponse(
                 parts.push(`📍 ${trail}`);
             }
 
-            // Content
+            // Content — excerpt by default, full text only for small result sets
             if (result.textual_representation) {
-                parts.push(result.textual_representation);
+                if (includeFullContent) {
+                    parts.push(result.textual_representation);
+                } else {
+                    parts.push(truncateText(result.textual_representation, EXCERPT_MAX_CHARS));
+                }
             }
 
             // Link

@@ -131,7 +131,7 @@ export function createSearchTool(
 
                 end({ status: 'success' });
                 searchTotal.inc({ status: 'success' });
-                return formatSearchResponse(response, tier, collection);
+                return formatSearchResponse(response, tier, collection, validated.limit);
             } catch (error) {
                 end({ status: 'error' });
                 searchTotal.inc({ status: 'error' });
