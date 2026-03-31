@@ -1,0 +1,5 @@
+FROM ghcr.io/airweave-ai/airweave-backend:latest
+
+# Cross-encoder reranker (bge-reranker-v2-m3) needs sentence-transformers
+# KG is handled by dedicated LightRAG container — no lightrag dep needed here
+RUN pip install --no-cache-dir sentence-transformers==4.1.0

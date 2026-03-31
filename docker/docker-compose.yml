@@ -46,8 +46,10 @@ services:
 
   backend:
     container_name: airweave-backend
-    # Use pre-built image of latest release, or override with BACKEND_IMAGE env var for testing
-    image: ${BACKEND_IMAGE:-ghcr.io/airweave-ai/airweave-backend:latest}
+    # Custom image with sentence-transformers for cross-encoder reranking
+    build:
+      context: .
+      dockerfile: Dockerfile.backend-local
     # Import all variables from .env file
     env_file:
       - ../.env
@@ -226,7 +228,7 @@ services:
 
   temporal-worker:
     container_name: airweave-temporal-worker
-    # Use pre-built image of latest release, or override with BACKEND_IMAGE env var for testing
+    # Pre-built image — KG ingestion is via HTTP to LightRAG container, no local deps needed
     image: ${BACKEND_IMAGE:-ghcr.io/airweave-ai/airweave-backend:latest}
     # Import all variables from .env file (same as backend)
     env_file:
@@ -347,6 +349,30 @@ services:
       retries: 30
     restart: on-failure
 
+  # LightRAG — Knowledge graph service with REST API
+  lightrag:
+    container_name: airweave-lightrag
+    image: ghcr.io/hkuds/lightrag:latest
+    ports:
+      - "9621:9621"
+    env_file:
+      - lightrag.env
+    volumes:
+      - lightrag_data:/app/data/rag_storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WORKING_DIR: "/app/data/rag_storage"
+      HOST: "0.0.0.0"
+      PORT: "9621"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9621/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure
+
   # MCP Server — Streamable HTTP transport for AI assistant integration
   mcp:
     container_name: airweave-mcp
@@ -441,3 +467,4 @@ volumes:
   vespa_data:
   rustfs_data:
   rustfs_logs:
+  lightrag_data:

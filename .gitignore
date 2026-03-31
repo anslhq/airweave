@@ -89,3 +89,5 @@ logs/
 monke/.runs/
 .mcp.json
 .serena/
+docker/lightrag.env
+LightRAG
