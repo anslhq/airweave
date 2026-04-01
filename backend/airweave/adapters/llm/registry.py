@@ -207,7 +207,7 @@ MODEL_REGISTRY: dict[LLMProvider, dict[LLMModel, LLMModelSpec]] = {
         ),
         # ── GPT-5.2 / Gemini (OpenAI-compatible, routed via local proxy) ──
         LLMModel.GPT_5_2: LLMModelSpec(
-            api_model_name="gemini-3.1-pro-preview(high)",
+            api_model_name="gemini-2.5-flash",
             context_window=274_000,
             max_output_tokens=16_384,
             required_tokenizer_type=TokenizerType.TIKTOKEN,
