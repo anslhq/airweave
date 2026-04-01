@@ -1,7 +1,7 @@
 """LightRAG Knowledge Graph adapter — HTTP client for the dedicated LightRAG container.
 
-Replaces the embedded in-process approach with HTTP calls to the LightRAG REST API
-running at http://lightrag:9621. No lightrag-hku dependency needed in the backend.
+Uses the LIGHTRAG-WORKSPACE header for per-collection isolation.
+Each collection gets its own graph, vectors, and storage within the single container.
 
 Usage:
     kg = KnowledgeGraphService(collection_readable_id="test-v0titp")
@@ -17,27 +17,32 @@ import httpx
 logger = logging.getLogger(__name__)
 
 LIGHTRAG_BASE_URL = "http://lightrag:9621"
-LIGHTRAG_INGEST_TIMEOUT = 300.0  # 5 min for large ingestion batches
-LIGHTRAG_QUERY_TIMEOUT = 10.0  # 10s max for KG queries — fail fast, don't block search
+LIGHTRAG_INGEST_TIMEOUT = 300.0
+LIGHTRAG_QUERY_TIMEOUT = 10.0
 
 
 class KnowledgeGraphService:
-    """HTTP client for the dedicated LightRAG container."""
+    """HTTP client for the dedicated LightRAG container with per-collection workspace isolation."""
 
     def __init__(self, collection_readable_id: str):
         self.collection_readable_id = collection_readable_id
         self._client: Optional[httpx.AsyncClient] = None
+
+    def _headers(self) -> dict[str, str]:
+        """Headers with workspace isolation — every request is scoped to this collection."""
+        return {"LIGHTRAG-WORKSPACE": self.collection_readable_id}
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=LIGHTRAG_BASE_URL,
                 timeout=LIGHTRAG_QUERY_TIMEOUT,
+                headers=self._headers(),
             )
         return self._client
 
     async def ingest(self, text: str) -> bool:
-        """Ingest a single document into the KG."""
+        """Ingest a single document into the collection's KG workspace."""
         client = await self._get_client()
         try:
             resp = await client.post(
@@ -52,7 +57,7 @@ class KnowledgeGraphService:
             return False
 
     async def ingest_batch(self, texts: list[str]) -> int:
-        """Ingest multiple documents. Returns count of successful ingestions."""
+        """Ingest multiple documents into the collection's KG workspace."""
         if not texts:
             return 0
 
@@ -79,7 +84,7 @@ class KnowledgeGraphService:
         return ingested
 
     async def query(self, query: str, mode: str = "hybrid") -> str:
-        """Query the knowledge graph. Returns entity/relationship context string."""
+        """Query this collection's KG workspace."""
         client = await self._get_client()
         try:
             resp = await client.post(
