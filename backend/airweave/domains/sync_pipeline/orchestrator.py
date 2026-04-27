@@ -539,6 +539,7 @@ class SyncOrchestrator:
             return
 
         collection_readable_id = str(self.sync_context.collection.readable_id)
+        kg = None
 
         try:
             from airweave.adapters.knowledge_graph import KnowledgeGraphService
@@ -560,8 +561,6 @@ class SyncOrchestrator:
                 f"'{collection_readable_id}'"
             )
 
-            await kg.cleanup()
-
         except Exception as e:
             # Fault-tolerant: KG failure must never fail the sync
             self.sync_context.logger.warning(
@@ -573,6 +572,11 @@ class SyncOrchestrator:
         finally:
             # Free the collected texts to release memory
             self.runtime.kg_texts.clear()
+            if kg is not None:
+                try:
+                    await kg.cleanup()
+                except Exception:
+                    pass  # Best-effort cleanup
 
     async def _complete_sync(self) -> None:
         """Mark sync job as completed with final statistics."""

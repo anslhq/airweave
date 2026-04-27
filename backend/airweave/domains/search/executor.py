@@ -690,6 +690,7 @@ async def _query_knowledge_graph(query: str, collection_readable_id: str) -> str
     if not _KG_AVAILABLE:
         return ""
 
+    kg_service = None
     try:
         kg_service = KnowledgeGraphService(collection_readable_id=collection_readable_id)
         result = await kg_service.query(query, mode="hybrid")
@@ -701,3 +702,9 @@ async def _query_knowledge_graph(query: str, collection_readable_id: str) -> str
             exc_info=True,
         )
         return ""
+    finally:
+        if kg_service is not None:
+            try:
+                await kg_service.cleanup()
+            except Exception:
+                pass  # Best-effort cleanup

@@ -40,7 +40,6 @@ class SearchConfig:
     #   (LLMProvider.CEREBRAS, LLMModel.GPT_OSS_120B),
     LLM_FALLBACK_CHAIN: list[tuple[LLMProvider, LLMModel]] = [
         (LLMProvider.TOGETHER, LLMModel.GPT_5_2),
-        (LLMProvider.TOGETHER, LLMModel.ZAI_GLM_5),
         (LLMProvider.ANTHROPIC, LLMModel.CLAUDE_SONNET_4_6),
     ]
 

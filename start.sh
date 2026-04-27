@@ -666,6 +666,7 @@ if [[ -z $SKIP_CONTAINER_CREATION ]]; then
     [[ $USE_VESPA == true ]] && compose_args+=(--profile vespa)
     [[ $USE_DOCLING == true ]] && compose_args+=(--profile docling)
     [[ $USE_RUSTFS == true ]] && compose_args+=(--profile rustfs)
+    [[ $USE_MCP == true ]] && compose_args+=(--profile mcp)
 
     if ! $COMPOSE_CMD "${compose_args[@]}" up -d; then
         log_error "Failed to start Docker services"

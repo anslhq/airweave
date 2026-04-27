@@ -205,9 +205,11 @@ MODEL_REGISTRY: dict[LLMProvider, dict[LLMModel, LLMModelSpec]] = {
             input_price_factor=0.30,
             output_price_factor=1.20,
         ),
-        # ── GPT-5.2 / Gemini (OpenAI-compatible, routed via local proxy) ──
+        # ── GPT-5.2 (OpenAI-compatible, routed via local proxy) ──
+        # Uses gpt-5.4-mini — cheaper and faster than gpt-5.2, handles Pydantic
+        # $ref schemas properly (gemini-2.5-flash fails tool calls on those).
         LLMModel.GPT_5_2: LLMModelSpec(
-            api_model_name="gemini-2.5-flash",
+            api_model_name="gpt-5.4-mini",
             context_window=274_000,
             max_output_tokens=16_384,
             required_tokenizer_type=TokenizerType.TIKTOKEN,
