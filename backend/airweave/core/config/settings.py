@@ -194,6 +194,9 @@ class Settings(BaseSettings):
     CEREBRAS_API_KEY: Optional[str] = None
     TOGETHER_API_KEY: Optional[str] = None
     TOGETHER_BASE_URL: Optional[str] = None
+    OPENAI_COMPAT_API_KEY: Optional[str] = None
+    OPENAI_COMPAT_BASE_URL: Optional[str] = None
+    ENABLE_LOCAL_RERANKER: bool = False
     AZURE_KEYVAULT_NAME: Optional[str] = None
 
     # Docling OCR fallback service (None = disabled)

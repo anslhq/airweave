@@ -39,7 +39,7 @@ class SearchConfig:
     # provider. For example, to use GPT_OSS_120B on Cerebras instead of GLM:
     #   (LLMProvider.CEREBRAS, LLMModel.GPT_OSS_120B),
     LLM_FALLBACK_CHAIN: list[tuple[LLMProvider, LLMModel]] = [
-        (LLMProvider.TOGETHER, LLMModel.GPT_5_2),
+        (LLMProvider.OPENAI_COMPAT, LLMModel.GPT_5_2),
         (LLMProvider.ANTHROPIC, LLMModel.CLAUDE_SONNET_4_6),
     ]
 

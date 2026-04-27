@@ -12,7 +12,11 @@ with benefits of pre-trained vocabulary/IDF, stopword removal, and learned term 
 """
 
 import json
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+
+from aiofiles import open as aio_open
 
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
 from airweave.domains.embedders.exceptions import EmbedderProviderError
@@ -62,10 +66,8 @@ class ChunkEmbedProcessor:
             sync_context.logger.debug("[ChunkEmbedProcessor] No entities after text building")
             return []
 
-        # Step 2.5: Collect parent entity texts for KG ingestion (before chunking releases them)
-        for entity in processed:
-            if entity.textual_representation:
-                runtime.kg_texts.append(entity.textual_representation)
+        # Step 2.5: Spool parent entity texts for KG ingestion without keeping them all in memory.
+        await self._append_kg_texts(processed, runtime)
 
         # Step 3: Chunk entities
         chunk_entities = await self._chunk_entities(processed, sync_context, runtime)
@@ -210,6 +212,32 @@ class ChunkEmbedProcessor:
                 chunk_entities.append(chunk_entity)
 
         return chunk_entities
+
+    async def _append_kg_texts(
+        self,
+        entities: List[BaseEntity],
+        runtime: "SyncRuntime",
+    ) -> None:
+        """Append parent entity texts to a per-sync spool file for later KG ingestion."""
+        payloads = [
+            entity.textual_representation
+            for entity in entities
+            if entity.textual_representation
+        ]
+        if not payloads:
+            return
+
+        if runtime.kg_spool_path is None:
+            with tempfile.NamedTemporaryFile(
+                prefix="airweave-kg-",
+                suffix=".jsonl",
+                delete=False,
+            ) as tmp:
+                runtime.kg_spool_path = Path(tmp.name)
+
+        async with aio_open(runtime.kg_spool_path, "a", encoding="utf-8") as handle:
+            for text in payloads:
+                await handle.write(json.dumps({"text": text}) + "\n")
 
     # -------------------------------------------------------------------------
     # Embedding

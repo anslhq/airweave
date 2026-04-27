@@ -6,7 +6,7 @@ work with any OpenAI-compatible endpoint (local LLMs, vLLM, Ollama, etc.).
 Key differences from other providers:
 - Uses standard OpenAI response_format for structured JSON output
 - No provider-specific reasoning/thinking parameters
-- base_url configurable via TOGETHER_BASE_URL (reuses existing setting)
+- base_url configured explicitly via OPENAI_COMPAT_BASE_URL
 """
 
 import json
@@ -37,18 +37,19 @@ class OpenAICompatLLM(BaseLLM):
         model_spec: LLMModelSpec,
         max_retries: int | None = None,
     ) -> None:
+        """Initialize the OpenAI-compatible client with explicit proxy settings."""
         super().__init__(model_spec, max_retries=max_retries)
 
-        api_key = settings.TOGETHER_API_KEY
+        api_key = settings.OPENAI_COMPAT_API_KEY
         if not api_key:
             raise ValueError(
-                "TOGETHER_API_KEY not configured. Set it in your environment or .env file."
+                "OPENAI_COMPAT_API_KEY not configured. Set it in your environment or .env file."
             )
 
-        base_url = settings.TOGETHER_BASE_URL
+        base_url = settings.OPENAI_COMPAT_BASE_URL
         if not base_url:
             raise ValueError(
-                "TOGETHER_BASE_URL is required for OpenAI-compatible provider. "
+                "OPENAI_COMPAT_BASE_URL is required for OpenAI-compatible provider. "
                 "Set it to your endpoint URL (e.g. http://localhost:8317/v1)."
             )
 

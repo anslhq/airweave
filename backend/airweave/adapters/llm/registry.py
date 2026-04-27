@@ -23,6 +23,7 @@ class LLMProvider(str, Enum):
     GROQ = "groq"
     ANTHROPIC = "anthropic"
     TOGETHER = "together"
+    OPENAI_COMPAT = "openai_compat"
 
 
 class LLMModel(str, Enum):
@@ -205,7 +206,9 @@ MODEL_REGISTRY: dict[LLMProvider, dict[LLMModel, LLMModelSpec]] = {
             input_price_factor=0.30,
             output_price_factor=1.20,
         ),
-        # ── GPT-5.2 (OpenAI-compatible, routed via local proxy) ──
+    },
+    LLMProvider.OPENAI_COMPAT: {
+        # ── GPT-5.2 (OpenAI-compatible local/remote proxy) ─────────
         # Uses gpt-5.4-mini — cheaper and faster than gpt-5.2, handles Pydantic
         # $ref schemas properly (gemini-2.5-flash fails tool calls on those).
         LLMModel.GPT_5_2: LLMModelSpec(
@@ -228,6 +231,7 @@ PROVIDER_API_KEY_SETTINGS: dict[LLMProvider, str] = {
     LLMProvider.GROQ: "GROQ_API_KEY",
     LLMProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
     LLMProvider.TOGETHER: "TOGETHER_API_KEY",
+    LLMProvider.OPENAI_COMPAT: "OPENAI_COMPAT_API_KEY",
 }
 
 

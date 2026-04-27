@@ -8,6 +8,7 @@ are injected directly into their consumers via constructor DI.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
@@ -31,6 +32,6 @@ class SyncRuntime:
     cursor: Optional["SyncCursor"] = None
     destinations: List["BaseDestination"] = field(default_factory=list)
 
-    # Knowledge graph text collector — populated by entity pipeline during
-    # text building, consumed by orchestrator's KG ingestion phase.
-    kg_texts: List[str] = field(default_factory=list)
+    # Knowledge graph spool file — populated incrementally during text building,
+    # consumed by orchestrator's KG ingestion phase to avoid buffering all text in memory.
+    kg_spool_path: Optional[Path] = None

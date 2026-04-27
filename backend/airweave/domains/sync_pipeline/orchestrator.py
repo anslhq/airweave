@@ -1,8 +1,12 @@
 """Module for data synchronization with TRUE batching + toggleable batching."""
 
 import asyncio
+import json
 import time
+from pathlib import Path
 from typing import Optional
+
+from aiofiles import open as aio_open
 
 from airweave import schemas
 from airweave.analytics import business_events
@@ -125,12 +129,9 @@ class SyncOrchestrator:
                 )
 
             # Phase 2.7: Knowledge graph ingestion (fault-tolerant)
-            if self.runtime.kg_texts:
+            if self.runtime.kg_spool_path:
                 phase_start = time.time()
-                self.sync_context.logger.info(
-                    f"🚀 PHASE 2.7: Knowledge graph ingestion "
-                    f"({len(self.runtime.kg_texts)} texts)..."
-                )
+                self.sync_context.logger.info("🚀 PHASE 2.7: Knowledge graph ingestion...")
                 await self._ingest_knowledge_graph()
                 self.sync_context.logger.info(
                     f"✅ PHASE 2.7 complete ({time.time() - phase_start:.2f}s)"
@@ -528,14 +529,9 @@ class SyncOrchestrator:
         )
 
     async def _ingest_knowledge_graph(self) -> None:
-        """Ingest collected entity texts into the per-collection knowledge graph.
-
-        Uses LightRAG for entity/relationship extraction. Fault-tolerant:
-        if KG ingestion fails for any reason, the error is logged but the
-        sync continues successfully.
-        """
-        texts = self.runtime.kg_texts
-        if not texts:
+        """Ingest spooled entity texts into the per-collection knowledge graph."""
+        spool_path = self.runtime.kg_spool_path
+        if spool_path is None:
             return
 
         collection_readable_id = str(self.sync_context.collection.readable_id)
@@ -547,22 +543,13 @@ class SyncOrchestrator:
             kg = KnowledgeGraphService(
                 collection_readable_id=collection_readable_id
             )
-
-            self.sync_context.logger.info(
-                f"[KG] Starting knowledge graph ingestion for collection "
-                f"'{collection_readable_id}' with {len(texts)} entity texts"
-            )
-
-            ingested = await kg.ingest_batch(texts)
-
+            ingested_attempts = await self._ingest_knowledge_graph_batches(kg, spool_path)
             self.sync_context.logger.info(
                 f"[KG] Knowledge graph ingestion complete: "
-                f"{ingested}/{len(texts)} texts ingested for collection "
+                f"{ingested_attempts} texts ingested for collection "
                 f"'{collection_readable_id}'"
             )
-
         except Exception as e:
-            # Fault-tolerant: KG failure must never fail the sync
             self.sync_context.logger.warning(
                 f"[KG] Knowledge graph ingestion failed for collection "
                 f"'{collection_readable_id}': {get_error_message(e)}. "
@@ -570,13 +557,55 @@ class SyncOrchestrator:
                 exc_info=True,
             )
         finally:
-            # Free the collected texts to release memory
-            self.runtime.kg_texts.clear()
             if kg is not None:
                 try:
                     await kg.cleanup()
                 except Exception:
-                    pass  # Best-effort cleanup
+                    pass
+            await self._cleanup_kg_spool_file(spool_path)
+
+    async def _ingest_knowledge_graph_batches(self, kg, spool_path: Path) -> int:
+        """Read KG spool content and ingest it in bounded batches."""
+        collection_readable_id = str(self.sync_context.collection.readable_id)
+        self.sync_context.logger.info(
+            f"[KG] Starting knowledge graph ingestion for collection "
+            f"'{collection_readable_id}' from spool '{spool_path.name}'"
+        )
+
+        batch: list[str] = []
+        ingested_attempts = 0
+        async with aio_open(spool_path, "r", encoding="utf-8") as handle:
+            async for line in handle:
+                text = self._parse_kg_spool_line(line)
+                if not text:
+                    continue
+                batch.append(text)
+                if len(batch) >= 100:
+                    ingested_attempts += await kg.ingest_batch(batch)
+                    batch = []
+
+        if batch:
+            ingested_attempts += await kg.ingest_batch(batch)
+
+        return ingested_attempts
+
+    @staticmethod
+    def _parse_kg_spool_line(line: str) -> str | None:
+        """Parse one JSONL KG spool line into text content."""
+        line = line.strip()
+        if not line:
+            return None
+        payload = json.loads(line)
+        text = payload.get("text")
+        return text or None
+
+    async def _cleanup_kg_spool_file(self, spool_path: Path) -> None:
+        """Delete the temporary KG spool file and clear runtime state."""
+        try:
+            Path(spool_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        self.runtime.kg_spool_path = None
 
     async def _complete_sync(self) -> None:
         """Mark sync job as completed with final statistics."""

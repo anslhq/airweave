@@ -63,6 +63,7 @@ RRF_K = 60
 # When a reranker is configured, fetch this many times the requested limit
 # from the vector DB so the reranker has a wider candidate pool to score.
 RERANK_OVERFETCH_MULTIPLIER = 3
+UNIQUE_PARENT_OVERFETCH_MULTIPLIER = 4
 
 
 class SearchPlanExecutor(SearchPlanExecutorProtocol):
@@ -89,7 +90,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         source_lifecycle: SourceLifecycleServiceProtocol,
         reranker: RerankerProtocol | None = None,
     ) -> None:
-        """Initialize with embedders, vector database, federated source deps, and optional reranker."""
+        """Initialize with embedders, vector database, federated sources, and reranker."""
         self._dense_embedder = dense_embedder
         self._sparse_embedder = sparse_embedder
         self._vector_db = vector_db
@@ -118,28 +119,26 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         original_limit = complete_plan.limit
         original_offset = complete_plan.offset
 
-        # When a reranker is configured, over-fetch so it has a wider pool to score.
+        # Over-fetch so we can preserve full pages after chunk-level deduplication.
         rerank_overfetch = RERANK_OVERFETCH_MULTIPLIER if self._reranker else 1
         effective_limit = original_limit * rerank_overfetch
+        fetch_limit = (original_offset + effective_limit) * UNIQUE_PARENT_OVERFETCH_MULTIPLIER
 
         if federated_sources:
             complete_plan = complete_plan.model_copy(
                 update={
-                    "limit": original_offset + effective_limit,
+                    "limit": fetch_limit,
                     "offset": 0,
                 }
             )
-        elif rerank_overfetch > 1:
-            # No federated sources but reranker is active — widen the fetch window.
+        elif fetch_limit != original_limit:
             complete_plan = complete_plan.model_copy(
                 update={
-                    "limit": effective_limit,
+                    "limit": fetch_limit,
                 }
             )
 
         # 4. Run vector DB search, federated search, and KG query in parallel
-        fetch_limit = original_offset + effective_limit
-
         vector_task = asyncio.create_task(self._execute_vector_search(complete_plan, collection_id))
 
         fed_task = None
@@ -161,32 +160,31 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         fed_results = await fed_task if fed_task else []
         kg_context = await kg_task
 
-        # 5. If no federated sources, vector DB already has correct limit/offset
+        # 5. Collapse chunk hits to the best result per parent entity before pagination.
+        vector_unique = _best_result_per_entity(vector_results)
+
         if not federated_sources:
-            deduplicated = _deduplicate_by_entity(vector_results, effective_limit)
+            paginated = _slice_unique_entities(vector_unique, original_offset, effective_limit)
             reranked = await self._maybe_rerank(
-                plan.query.primary, deduplicated, original_limit
+                plan.query.primary, paginated, original_limit
             )
             return SearchResults(results=reranked, knowledge_graph_context=kg_context)
 
-        # 6. We over-fetched from vector DB (limit=offset+limit, offset=0) for RRF.
-        #    Filter federated results in-memory and merge, or slice vector-only.
+        # 6. Filter federated results in-memory and merge with vector results.
         fed_filtered = self._apply_filters_in_memory(fed_results, complete_plan.filter_groups)
+        fed_unique = _best_result_per_entity(fed_filtered)
 
-        if fed_filtered:
-            merged = self._merge_with_rrf(vector_results, fed_filtered)
-            paginated = merged[original_offset : original_offset + effective_limit]
-            deduplicated = _deduplicate_by_entity(paginated, effective_limit)
+        if fed_unique:
+            merged = self._merge_with_rrf(vector_unique, fed_unique)
+            paginated = _slice_unique_entities(merged, original_offset, effective_limit)
             reranked = await self._maybe_rerank(
-                plan.query.primary, deduplicated, original_limit
+                plan.query.primary, paginated, original_limit
             )
             return SearchResults(results=reranked, knowledge_graph_context=kg_context)
 
-        # All federated results filtered out — slice vector results to original window
-        paginated = vector_results[original_offset : original_offset + effective_limit]
-        deduplicated = _deduplicate_by_entity(paginated, effective_limit)
+        paginated = _slice_unique_entities(vector_unique, original_offset, effective_limit)
         reranked = await self._maybe_rerank(
-            plan.query.primary, deduplicated, original_limit
+            plan.query.primary, paginated, original_limit
         )
         return SearchResults(results=reranked, knowledge_graph_context=kg_context)
 
@@ -512,19 +510,11 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 # ── Entity-level deduplication (module-level for testability) ────────
 
 
-def _deduplicate_by_entity(
-    results: list[SearchResult],
-    limit: int,
-) -> list[SearchResult]:
+def _best_result_per_entity(results: list[SearchResult]) -> list[SearchResult]:
     """Collapse multiple chunks from the same parent entity into the best-scoring one.
 
-    Chunks share an original_entity_id (stored in airweave_system_metadata).
-    When the same document produces several chunks (e.g., "{id}__chunk_0",
-    "{id}__chunk_1", ...), only the highest-relevance_score chunk is kept.
-    This improves result diversity for MCP/RAG consumers.
-
-    The input order (by relevance) is preserved: the first occurrence of each
-    original_entity_id wins because results are already sorted by score desc.
+    The returned list preserves the original ranking order of the winning chunk for
+    each parent entity.
     """
     seen: dict[str, SearchResult] = {}
     for result in results:
@@ -532,10 +522,8 @@ def _deduplicate_by_entity(
         if orig_id not in seen:
             seen[orig_id] = result
         elif result.relevance_score > seen[orig_id].relevance_score:
-            # Unlikely given results arrive sorted, but guard against unsorted merges.
             seen[orig_id] = result
 
-    # Preserve the original relevance ordering.
     deduplicated: list[SearchResult] = []
     added: set[str] = set()
     for result in results:
@@ -543,10 +531,19 @@ def _deduplicate_by_entity(
         if orig_id not in added and seen[orig_id] is result:
             deduplicated.append(result)
             added.add(orig_id)
-            if len(deduplicated) >= limit:
-                break
 
     return deduplicated
+
+
+def _slice_unique_entities(
+    results: list[SearchResult],
+    offset: int,
+    limit: int,
+) -> list[SearchResult]:
+    """Return the requested page from a list that is already unique by parent entity."""
+    if limit <= 0:
+        return []
+    return results[offset : offset + limit]
 
 
 # ── In-memory filter helpers (module-level for testability) ──────────
@@ -690,10 +687,10 @@ async def _query_knowledge_graph(query: str, collection_readable_id: str) -> str
     if not _KG_AVAILABLE:
         return ""
 
-    kg_service = None
     try:
         kg_service = KnowledgeGraphService(collection_readable_id=collection_readable_id)
-        result = await kg_service.query(query, mode="hybrid")
+        async with kg_service:
+            result = await kg_service.query(query, mode="hybrid")
         return result or ""
     except Exception:
         logger.warning(

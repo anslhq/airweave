@@ -7,6 +7,7 @@ bypassing the container's shared fallback chain.
 from airweave.adapters.llm.anthropic import AnthropicLLM
 from airweave.adapters.llm.cerebras import CerebrasLLM
 from airweave.adapters.llm.groq import GroqLLM
+from airweave.adapters.llm.openai_compat import OpenAICompatLLM
 from airweave.adapters.llm.registry import (
     LLMModel,
     LLMProvider,
@@ -20,6 +21,7 @@ _PROVIDER_CLASSES = {
     LLMProvider.CEREBRAS: CerebrasLLM,
     LLMProvider.GROQ: GroqLLM,
     LLMProvider.TOGETHER: TogetherLLM,
+    LLMProvider.OPENAI_COMPAT: OpenAICompatLLM,
 }
 
 

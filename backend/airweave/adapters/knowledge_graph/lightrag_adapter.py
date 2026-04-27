@@ -24,7 +24,16 @@ LIGHTRAG_QUERY_TIMEOUT = 10.0
 class KnowledgeGraphService:
     """HTTP client for the dedicated LightRAG container with per-collection workspace isolation."""
 
+    async def __aenter__(self) -> "KnowledgeGraphService":
+        """Support async context-manager usage for request-scoped cleanup."""
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        """Always close the underlying client when leaving the context."""
+        await self.cleanup()
+
     def __init__(self, collection_readable_id: str):
+        """Initialize the request-scoped KG client for one collection workspace."""
         self.collection_readable_id = collection_readable_id
         self._client: Optional[httpx.AsyncClient] = None
 

@@ -12,19 +12,23 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
 from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSparseEmbedder
 from airweave.domains.search.adapters.vector_db.fakes.vector_db import FakeVectorDB
+from airweave.domains.search.exceptions import FederatedSearchError
 from airweave.domains.search.executor import (
     SearchPlanExecutor,
+    _best_result_per_entity,
     _evaluate_scalar,
     _get_field_value,
     _matches_any_group,
     _matches_group,
+    _query_knowledge_graph,
+    _slice_unique_entities,
 )
 from airweave.domains.search.types import SearchPlan, SearchQuery, SearchResults
 from airweave.domains.search.types.filters import (
@@ -637,6 +641,29 @@ class TestExecutorVectorOnly:
 
         assert len(results.results) == 1
 
+    @pytest.mark.asyncio
+    async def test_vector_only_deduplicates_before_pagination(self):
+        vector_db = FakeVectorDB()
+        vector_results = [
+            _make_search_result(entity_id="doc-1__chunk_0", score=0.95, original_entity_id="doc-1"),
+            _make_search_result(entity_id="doc-1__chunk_1", score=0.90, original_entity_id="doc-1"),
+            _make_search_result(entity_id="doc-2__chunk_0", score=0.85, original_entity_id="doc-2"),
+            _make_search_result(entity_id="doc-3__chunk_0", score=0.80, original_entity_id="doc-3"),
+        ]
+        vector_db.seed_results(SearchResults(results=vector_results))
+
+        executor = _build_executor(vector_db=vector_db)
+        results = await executor.execute(
+            plan=_make_plan(limit=2, offset=1),
+            user_filter=[],
+            collection_id="col-1",
+            db=AsyncMock(),
+            ctx=_make_ctx(),
+            collection_readable_id="my-collection",
+        )
+
+        assert [r.entity_id for r in results.results] == ["doc-2__chunk_0", "doc-3__chunk_0"]
+
 
 class TestExecutorFederated:
     """Tests for execute() when federated sources exist."""
@@ -822,8 +849,6 @@ class TestExecutorFederated:
     @pytest.mark.asyncio
     async def test_federated_auth_failure_raises_error(self):
         """If federated source fails to instantiate, FederatedSearchError is raised."""
-        from airweave.domains.search.exceptions import FederatedSearchError
-
         vector_db = FakeVectorDB()
         vector_db.seed_results(SearchResults(results=[_make_search_result()]))
 
@@ -856,6 +881,52 @@ class TestExecutorFederated:
 
         assert len(exc_info.value.source_errors) == 1
         assert exc_info.value.source_errors[0][0] == "slack"
+
+
+class TestEntityDedupHelpers:
+    """Tests for chunk deduplication and unique-parent pagination helpers."""
+
+    def test_best_result_per_entity_keeps_highest_scoring_chunk(self):
+        results = [
+            _make_search_result(entity_id="doc-1__chunk_0", score=0.9, original_entity_id="doc-1"),
+            _make_search_result(entity_id="doc-1__chunk_1", score=0.7, original_entity_id="doc-1"),
+            _make_search_result(entity_id="doc-2__chunk_0", score=0.8, original_entity_id="doc-2"),
+        ]
+
+        deduped = _best_result_per_entity(results)
+
+        assert [r.entity_id for r in deduped] == ["doc-1__chunk_0", "doc-2__chunk_0"]
+
+    def test_slice_unique_entities_applies_offset_after_deduplication(self):
+        results = [
+            _make_search_result(entity_id="doc-1__chunk_0", score=0.95, original_entity_id="doc-1"),
+            _make_search_result(entity_id="doc-2__chunk_0", score=0.90, original_entity_id="doc-2"),
+            _make_search_result(entity_id="doc-3__chunk_0", score=0.85, original_entity_id="doc-3"),
+        ]
+
+        page = _slice_unique_entities(results, offset=1, limit=2)
+
+        assert [r.entity_id for r in page] == ["doc-2__chunk_0", "doc-3__chunk_0"]
+
+
+class TestKnowledgeGraphQuery:
+    @pytest.mark.asyncio
+    async def test_query_knowledge_graph_cleans_up_client(self):
+        kg = AsyncMock()
+        cm = AsyncMock()
+        cm.__aenter__.return_value = kg
+        kg.__aenter__.return_value = cm
+        kg.query.return_value = "graph context"
+
+        with (
+            patch("airweave.domains.search.executor._KG_AVAILABLE", True),
+            patch("airweave.domains.search.executor.KnowledgeGraphService", return_value=kg),
+        ):
+            result = await _query_knowledge_graph("deploy", "my-collection")
+
+        assert result == "graph context"
+        kg.__aenter__.assert_called_once_with()
+        kg.query.assert_awaited_once_with("deploy", mode="hybrid")
 
 
 class TestExecutorPagination:
@@ -989,8 +1060,6 @@ class TestExecutorErrorPaths:
     @pytest.mark.asyncio
     async def test_federated_source_instantiation_failure_raises(self):
         """Federated source that can't be instantiated → FederatedSearchError."""
-        from airweave.domains.search.exceptions import FederatedSearchError
-
         vector_db = FakeVectorDB()
         vector_db.seed_results(SearchResults(results=[_make_search_result()]))
 
@@ -1027,7 +1096,6 @@ class TestExecutorErrorPaths:
     @pytest.mark.asyncio
     async def test_federated_source_search_failure_raises(self):
         """Federated source that errors during search() → FederatedSearchError."""
-        from airweave.domains.search.exceptions import FederatedSearchError
 
         class _FailingFederatedSource:
             short_name = "slack"

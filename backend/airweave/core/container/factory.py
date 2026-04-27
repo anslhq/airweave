@@ -24,6 +24,7 @@ from airweave.adapters.llm.anthropic import AnthropicLLM
 from airweave.adapters.llm.cerebras import CerebrasLLM
 from airweave.adapters.llm.fallback import FallbackChainLLM
 from airweave.adapters.llm.groq import GroqLLM
+from airweave.adapters.llm.openai_compat import OpenAICompatLLM
 from airweave.adapters.llm.registry import (
     PROVIDER_API_KEY_SETTINGS,
     LLMProvider,
@@ -31,7 +32,6 @@ from airweave.adapters.llm.registry import (
 from airweave.adapters.llm.registry import (
     get_model_spec as get_llm_model_spec,
 )
-from airweave.adapters.llm.openai_compat import OpenAICompatLLM
 from airweave.adapters.llm.together import TogetherLLM
 from airweave.adapters.metrics import (
     PrometheusAgenticSearchMetrics,
@@ -1221,6 +1221,7 @@ def _build_llm_chain(
         LLMProvider.CEREBRAS: CerebrasLLM,
         LLMProvider.GROQ: GroqLLM,
         LLMProvider.TOGETHER: TogetherLLM,
+        LLMProvider.OPENAI_COMPAT: OpenAICompatLLM,
     }
 
     # Collect available (provider, model_spec, class) tuples first,
@@ -1237,11 +1238,6 @@ def _build_llm_chain(
         if provider_cls is None:
             logger.warning(f"[SearchFactory] Unknown provider: {provider.value}")
             continue
-
-        # Use OpenAI-compatible client when a custom base_url is configured
-        # (e.g. local LLM endpoints that speak OpenAI protocol, not Together's)
-        if provider == LLMProvider.TOGETHER and settings.TOGETHER_BASE_URL:
-            provider_cls = OpenAICompatLLM
 
         available.append((provider, model, model_spec, provider_cls))
 
@@ -1330,13 +1326,13 @@ def _create_search_services(
     llm = _build_llm_chain(settings, config, circuit_breaker)
 
     # 3. Reranker (optional)
-    #    Cohere is preferred when an API key is available; otherwise fall back
-    #    to a local cross-encoder (BAAI/bge-reranker-v2-m3 via sentence-transformers).
+    #    Cohere is preferred when an API key is available. A local cross-encoder
+    #    is only enabled explicitly for local experimentation.
     reranker = None
     if getattr(settings, "COHERE_API_KEY", None):
         reranker = CohereReranker(api_key=settings.COHERE_API_KEY)
         logger.info("[SearchFactory] Cohere reranker enabled")
-    else:
+    elif getattr(settings, "ENABLE_LOCAL_RERANKER", False):
         reranker = CrossEncoderReranker()
         logger.info("[SearchFactory] Cross-encoder reranker enabled (bge-reranker-v2-m3)")
 
